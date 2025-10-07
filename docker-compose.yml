@@ -1,0 +1,71 @@
+services:
+  feeder-db:
+    restart: always
+    container_name: feeder-db
+    image: postgres:16
+    env_file: ./postgresql-db/.pg-env
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./postgresql-db/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  feeder-broker:
+    image: rabbitmq:3.13-management-alpine
+    container_name: feeder-broker
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  feeder-app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: feeder-app
+    depends_on:
+      feeder-db:
+        condition: service_healthy
+      feeder-broker:
+        condition: service_healthy
+    env_file: ./app/.env
+    command: sh -c "alembic upgrade head && python main.py"
+
+  feeder-worker:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: feeder-worker
+    depends_on:
+      feeder-db:
+        condition: service_healthy
+      feeder-broker:
+        condition: service_healthy
+    env_file: ./app/.env
+    command: celery -A users.tasks worker -l info
+
+  feeder-beat:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: feeder-beat
+    depends_on:
+      feeder-db:
+        condition: service_healthy
+      feeder-broker:
+        condition: service_healthy
+    env_file: ./app/.env
+    command: celery -A users.tasks beat -l info
+
